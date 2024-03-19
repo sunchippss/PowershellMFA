@@ -1,0 +1,74 @@
+# Import the Active Directory module to use AD related cmdlets in the script
+Import-Module ActiveDirectory
+
+# Import data from a CSV file. This data is assumed to be a report on MFA status or similar for various accounts
+$csvData = Import-Csv -Path "I:\Adaxes\Reports\mfa_status_report_all_accounts_3.15.24FinalExportAzure.csv"
+
+# Initialize an array to store updated data. This will include both the original data and any new data fetched from Active Directory
+$updatedData = @()
+
+# Iterate through each row in the imported CSV data
+foreach ($row in $csvData) {
+    # Add new properties to each row to capture additional information. Initialize these properties with default values
+    # These properties include flags for user existence, contact info, user account status, and various user attributes
+    $row | Add-Member -Type NoteProperty -Name NoUserFound -Value $false
+    $row | Add-Member -Type NoteProperty -Name ADMobile -Value ""
+    $row | Add-Member -Type NoteProperty -Name Enabled -Value $false
+    $row | Add-Member -Type NoteProperty -Name GenerationQualifier -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Manager -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Mail -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Title -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Company -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Department -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Description -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name LastLogon -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name PwdLastSet -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name WhenCreated -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name LastLogonTimestamp -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name DistinguishedName -Value "N/A"
+
+    try {
+        # Attempt to find the user in Active Directory using their UserPrincipalName
+        $Username = $row.user
+        $adUser = Get-ADUser -Filter {UserPrincipalName -eq $Username} -Properties mobile, Enabled, generationQualifier, manager, mail, title, company, department, description, lastLogon, pwdLastSet, whenCreated, lastLogonTimestamp, distinguishedName -ErrorAction Stop
+
+        if ($adUser) {
+            # If user is found, update the row with actual values fetched from Active Directory
+            $row.Enabled = $adUser.Enabled
+            $row.GenerationQualifier = $adUser.generationQualifier
+            $row.Manager = if ($adUser.manager) { (Get-ADUser -Identity $adUser.manager -Properties displayName).displayName } else { "N/A" }
+            $row.Mail = $adUser.mail
+            $row.Title = $adUser.title
+            $row.Company = $adUser.company
+            $row.Department = $adUser.department
+            $row.Description = $adUser.description
+            $row.LastLogon = if ($adUser.lastLogon) { [datetime]::FromFileTime($adUser.lastLogon).ToString("g") } else { "Never" }
+            $row.PwdLastSet = if ($adUser.pwdLastSet) { [datetime]::FromFileTime($adUser.pwdLastSet).ToString("g") } else { "Never" }
+            $row.WhenCreated = $adUser.whenCreated.ToString("g")
+            $row.LastLogonTimestamp = if ($adUser.lastLogonTimestamp) { [datetime]::FromFileTime($adUser.lastLogonTimestamp).ToString("g") } else { "Never" }
+            $row.DistinguishedName = $adUser.distinguishedName
+
+            # Update mobile number if present, otherwise set it as 'blank'
+            if (-not [string]::IsNullOrWhiteSpace($adUser.mobile)) {
+                $row.ADMobile = $adUser.mobile
+            } else {
+                $row.ADMobile = 'blank'
+            }
+        } else {
+            # If the user was not found in Active Directory, mark the NoUserFound flag as True
+            $row.NoUserFound = $true
+            $row.ADMobile = 'N/A'
+        }
+    } catch {
+        # Catch any exceptions that occur during the AD query. Log the error and mark the user as not found
+        $row.NoUserFound = $true
+        $row.ADMobile = 'N/A'
+        Write-Host "Error : $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    # Add the updated row to the array of updated data
+    $updatedData += $row
+}
+
+# Export the updated data array to a new CSV file, overwriting any existing file without including type information
+$updatedData | Export-Csv -Path "I:\Adaxes\Reports\mfa_status_report_all_accounts_3.15.24FinalExportAzureWithProperties.csv" -NoTypeInformation
