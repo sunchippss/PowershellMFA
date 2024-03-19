@@ -1,0 +1,92 @@
+# Connect to Microsoft Graph
+# This command connects to the Microsoft Graph API using specified permissions (scopes). 
+# "User.Read.All" allows reading full profiles of all users in the organization.
+Connect-MgGraph -Scopes "User.Read.All"
+
+# Get all Azure users
+# This command fetches all user profiles from Azure AD and stores them in the $users variable.
+$users = Get-MgUser -All
+
+# Initialize an array to hold the results
+$results = @();
+Write-Host "`nRetrieved $($users.Count) users";
+
+# Loop through each user account
+# This loop processes each user fetched in the previous command.
+foreach ($user in $users) {
+    
+    # Print the current user being processed
+    Write-Host "`nProcessing $($user.UserPrincipalName)";
+
+    # Create a custom object for each user to store their details and MFA status.
+    # MFA (Multi-Factor Authentication) status is initially set to "Disabled".
+    $myObject = [PSCustomObject]@{
+        user               = $user.UserPrincipalName
+        MFAstatus          = "Disabled" # Default to disabled, will be updated if any MFA method is found
+        email              = $false
+        fido2              = $false
+        app                = $false
+        password           = $false
+        phone              = $false
+        softwareoath       = $false
+        tempaccess         = $false
+        hellobusiness      = $false
+    }
+
+    # Get MFA data for the current user
+    $MFAData = Get-MgUserAuthenticationMethod -UserId $user.UserPrincipalName
+    
+    # Check authentication methods for each user
+    # This loop checks the type of MFA methods enabled for the user and updates the custom object accordingly.
+    foreach ($method in $MFAData) {
+        switch ($method.AdditionalProperties["@odata.type"]) {
+            # For each case, if the method is found, set its corresponding property to $true
+            # and update the MFA status to "Enabled".
+            "#microsoft.graph.emailAuthenticationMethod"  { 
+                $myObject.email = $true 
+                $myObject.MFAstatus = "Enabled"
+            } 
+            "#microsoft.graph.fido2AuthenticationMethod" { 
+                $myObject.fido2 = $true 
+                $myObject.MFAstatus = "Enabled"
+            }
+            "#microsoft.graph.microsoftAuthenticatorAuthenticationMethod"  { 
+                $myObject.app = $true 
+                $myObject.MFAstatus = "Enabled"
+            }
+            "#microsoft.graph.passwordAuthenticationMethod" {              
+                $myObject.password = $true 
+                # Note: Password authentication does not change MFA status because it's considered a single factor.
+            }     
+            "#microsoft.graph.phoneAuthenticationMethod"  { 
+                $myObject.phone = $true 
+                $myObject.MFAstatus = "Enabled"
+            }
+            "#microsoft.graph.softwareOathAuthenticationMethod"  { 
+                $myObject.softwareoath = $true 
+                $myObject.MFAstatus = "Enabled"
+            }           
+            "#microsoft.graph.temporaryAccessPassAuthenticationMethod"  { 
+                $myObject.tempaccess = $true 
+                $myObject.MFAstatus = "Enabled"
+            }           
+            "#microsoft.graph.windowsHelloForBusinessAuthenticationMethod"  { 
+                $myObject.hellobusiness = $true 
+                $myObject.MFAstatus = "Enabled"
+            }                   
+        }
+    }
+
+    # Add the user's custom object to the results array
+    $results += $myObject;
+    
+}
+
+# Display the results
+# This command outputs the final results stored in the $results array to the console.
+$results
+
+# Optionally, export the results to a CSV file
+# This command exports the results stored in the $results array to a CSV file at the specified path.
+# The "-NoTypeInformation" parameter omits the type information line from the output file.
+$results | Export-Csv -Path "I:\Adaxes\Reports\mfa_status_report_all_accounts_3.15.24.csv" -NoTypeInformation
