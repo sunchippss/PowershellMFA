@@ -1,0 +1,41 @@
+# Import the necessary modules for Microsoft Graph commands.
+Import-Module Microsoft.Graph.Authentication
+Import-Module Microsoft.Graph.Users
+
+# Authenticate with Microsoft Graph using the Connect-MgGraph command.
+# This command will prompt you to log in and consent to the required permissions if you haven't already.
+$scopes = "User.Read.All", "UserAuthenticationMethod.ReadWrite.All"
+Connect-MgGraph -Scopes $scopes
+
+# Check if we have successfully connected to Microsoft Graph.
+if (-not (Get-MgContext)) {
+    Write-Host "Failed to connect to Microsoft Graph. Please check your credentials and try again." -ForegroundColor Red
+    exit
+}
+
+# Import user data from the CSV file.
+$csvData = Import-Csv -Path "I:\Adaxes\Reports\TestUpdateMFA.csv"
+
+# Loop through each row in the CSV data.
+foreach ($row in $csvData) {
+    # Check if the ADNormalProcessed field is set to "yes" and that the Email field is not empty or null.
+    if ($row.ADNormalProcessed -eq "yes" -and -not [string]::IsNullOrWhiteSpace($row.user)) {
+        # Extract the normalized mobile number.
+        $normalizedMobileNumber = $row.ADMobileNormal
+        # Construct the full phone number with the country code.
+        $phoneNumber = "+1$normalizedMobileNumber"  # Assuming the country code is always +1.
+
+        # Use the 'Email' column from the CSV which should contain the user's email address.
+        $user = $row.user
+
+        # Attempt to set the MFA phone method for the user.
+        try {
+            New-MgUserAuthenticationPhoneMethod -UserId $user -PhoneType 'Mobile' -PhoneNumber $phoneNumber
+            Write-Host "MFA phone method set for user: $user" -ForegroundColor Green
+        } catch {
+            Write-Host "Failed to set MFA phone method for user: $user. Error: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "Row skipped due to ADNormalProcessed not being 'yes' or missing Email for user: $($row.UserPrincipalName)" -ForegroundColor Yellow
+    }
+}
