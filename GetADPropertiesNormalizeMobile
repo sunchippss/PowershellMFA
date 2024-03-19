@@ -1,0 +1,108 @@
+# This PowerShell script enhances and normalizes user information from a CSV file using Active Directory data. It starts by importing necessary modules, processes each user record to update their mobile number and other attributes based on Active Directory, and exports the updated records to a new CSV file.
+
+# Import the Active Directory module to interact with AD objects, enabling commands that query or modify Active Directory objects.
+Import-Module ActiveDirectory
+
+# Defines a function to normalize mobile phone numbers. This function aims to clean and standardize mobile numbers to a specific format, making it easier to maintain consistency across user records.
+function Normalize-MobileNumber {
+    param (
+        [string]$mobile  # The mobile phone number to be normalized.
+    )
+    
+    # Removes any non-digit characters from the phone number to standardize it to numeric-only format.
+    $cleanMobile = $mobile -replace '\D', ''
+
+    # If the cleaned number starts with '1' and is 11 digits long, it assumes it's a US number with a country code, and removes the country code to standardize the length.
+    if ($cleanMobile.StartsWith("1") -and $cleanMobile.Length -eq 11) {
+        $cleanMobile = $cleanMobile.Substring(1)  # Removes the leading '1'.
+    }
+
+    # Checks if the cleaned number is exactly 10 digits long. If not, it reports the number as invalid.
+    if ($cleanMobile.Length -ne 10) {
+        Write-Host "Invalid mobile number length for: $mobile" -ForegroundColor Yellow
+        return $null  # Returns null for invalid numbers, indicating a problem with the phone number.
+    }
+    
+    return $cleanMobile  # Returns the normalized mobile number if it meets the criteria.
+}
+
+# Import user data from a specified CSV file into a PowerShell object for processing.
+$csvData = Import-Csv -Path "I:\Adaxes\Reports\mfa_status_report_all_accounts_3.15.24FinalExportAzure.csv"
+
+# Prepares an array to hold the updated user data after processing.
+$updatedData = @()
+
+# Processes each user record in the imported CSV data.
+foreach ($row in $csvData) {
+    # Initializes new properties for the user record to store additional information and indicators for processing.
+    $row | Add-Member -Type NoteProperty -Name NoUserFound -Value $false
+    $row | Add-Member -Type NoteProperty -Name ADMobile -Value ""
+    $row | Add-Member -Type NoteProperty -Name Enabled -Value $false
+    $row | Add-Member -Type NoteProperty -Name GenerationQualifier -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Manager -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Mail -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Title -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Company -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Department -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name Description -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name LastLogon -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name PwdLastSet -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name WhenCreated -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name LastLogonTimestamp -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name DistinguishedName -Value "N/A"
+    $row | Add-Member -Type NoteProperty -Name ADNormalProcessed -Value $false
+    $row | Add-Member -Type NoteProperty -Name ADMobileNormal -Value "N/A"
+
+    try {
+        # Attempts to find the user in Active Directory using their UserPrincipalName and fetch relevant attributes.
+        $Username = $row.user
+        $adUser = Get-ADUser -Filter {UserPrincipalName -eq $Username} -Properties mobile, Enabled, generationQualifier, manager, mail, title, company, department, description, lastLogon, pwdLastSet, whenCreated, lastLogonTimestamp, distinguishedName -ErrorAction Stop
+
+        # If the user is found, updates the CSV row with data from Active Directory.
+        if ($adUser) {
+            # Fills in the user record with details from Active Directory, such as whether the account is enabled, their email, manager, and other attributes.
+            $row.Enabled = $adUser.Enabled
+            $row.GenerationQualifier = $adUser.generationQualifier
+            $row.Manager = if ($adUser.manager) { (Get-ADUser -Identity $adUser.manager -Properties displayName).displayName } else { "N/A" }
+            $row.Mail = $adUser.mail
+            $row.Title = $adUser.title
+            $row.Company = $adUser.company
+            $row.Department = $adUser.department
+            $row.Description = $adUser.description
+            $row.LastLogon = if ($adUser.lastLogon) { [datetime]::FromFileTime($adUser.lastLogon).ToString("g") } else { "Never" }
+            $row.PwdLastSet = if ($adUser.pwdLastSet) { [datetime]::FromFileTime($adUser.pwdLastSet).ToString("g") } else { "Never" }
+            $row.WhenCreated = $adUser.whenCreated.ToString("g")
+            $row.LastLogonTimestamp = if ($adUser.lastLogonTimestamp) { [datetime]::FromFileTime($adUser.lastLogonTimestamp).ToString("g") } else { "Never" }
+            $row.DistinguishedName = $adUser.distinguishedName
+
+            # Normalizes the mobile number if present and updates the record accordingly.
+            if (-not [string]::IsNullOrWhiteSpace($adUser.mobile)) {
+                $normalizedMobile = Normalize-MobileNumber -mobile $adUser.mobile
+                if ($normalizedMobile) {
+                    $row.ADMobileNormal = $normalizedMobile  # Stores the normalized mobile number.
+                    $row.ADMobile = $adUser.mobile  # Keeps the original mobile number for reference.
+                    $row.ADNormalProcessed = "yes"
+                } else {
+                    $row.ADMobile = 'Invalid'  # Marks the mobile number as invalid if normalization fails.
+                }
+            } else {
+                $row.ADMobile = 'blank'  # Indicates that no mobile number was provided.
+            }
+        } else {
+            # Marks the user as not found if no matching AD user is found.
+            $row.NoUserFound = $true
+            $row.ADMobile = 'N/A'
+        }
+    } catch {
+        # Catches any exceptions during the AD query and marks the user as not found, logging the error.
+        $row.NoUserFound = $true
+        $row.ADMobile = 'N/A'
+        Write-Host "Error : $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    # Adds the updated row to the array of processed data.
+    $updatedData += $row
+}
+
+# Exports the array of updated user records to a new CSV file, with all modifications and additional information included.
+$updatedData | Export-Csv -Path "I:\Adaxes\Reports\mfa_status_report_all_accounts_3.15.24FinalExportAzureNormal.csv" -NoTypeInformation
